@@ -13,4 +13,3 @@ TensorFlow inside it by running `VENV_DIR/bin/pip3 install tensorflow==1.5.0`.
 Note that updates about the tasks (notably changes in the task descriptions) are
 announced on the [UFAL NPFL114 mailing list](https://groups.google.com/forum/#!forum/ufal-npfl114).
 However, the mailing list will not contain anything not present on this website.
-# deep-learning-class
