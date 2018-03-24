@@ -1,4 +1,4 @@
 mnist_data/
 logs/
-gym_cartpole/s
+.idea/
 *.gz
