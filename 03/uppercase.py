@@ -143,8 +143,12 @@ class Network:
             #self.predictions = tf.round(tf.argmax(output_layer, axis=1, name="actions"))
             #self.predictions = output_layer
 
-            self.weights = (19 * self.labels) +1
+            #self.weightss = (19 * self.labels) +1
+            # specify some class weightings
+            class_weights = tf.constant([0.95, 0.05])
 
+            # specify the weights for each sample in the batch (without having to compute the onehot label matrix)
+            self.weights = tf.gather(class_weights, self.labels)
 
 
             # TODO: Define training
