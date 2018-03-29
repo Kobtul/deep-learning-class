@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+#
+#4792aab4-bcb8-11e7-a937-00505601122b
+#e47d7ca8-23a9-11e8-9de3-00505601122b
 import numpy as np
 import tensorflow as tf
 
@@ -38,13 +41,44 @@ class Network:
             #   or (preferably) attached to `self.train` using `tf.control_dependencies`.
             # Store result in `features`.
 
-            output_layer = tf.layers.dense(features, self.LABELS, activation=None, name="output_layer")
+            hidden_layer = self.images
+            for element in args.cnn.split(','):
+                t_args = element.split('-')
+                if(t_args[0] == 'C'):
+                    filters = t_args[1]
+                    kernel_size = int(t_args[2])
+                    stride = int(t_args[3])
+                    padding = t_args[4]
+                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size,stride,padding, activation=tf.nn.relu)
+                elif(t_args[0] == 'M'):
+                    kernel_size = int(t_args[1])
+                    stride = int(t_args[2])
+                    hidden_layer = tf.layers.max_pooling2d(hidden_layer, kernel_size, stride)
+                elif(t_args[0] == 'F'):
+                    hidden_layer = tf.layers.flatten(hidden_layer, name="flatten")
+                elif(t_args[0] == 'R'):
+                    hidden_layer_size = t_args[1]
+                    hidden_layer = tf.layers.dense(hidden_layer, hidden_layer_size, activation=tf.nn.relu,
+                                                   name="hidden_layer")
+                elif (t_args[0] == 'CB'):
+                    filters = t_args[1]
+                    kernel_size = int(t_args[2])
+                    stride = int(t_args[3])
+                    padding = t_args[4]
+                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size,stride,padding, activation=None)
+                    hidden_layer = tf.layers.batch_normalization(hidden_layer,training=self.is_training)
+                    hidden_layer = tf.nn.relu(hidden_layer)
+
+            output_layer = tf.layers.dense(hidden_layer, self.LABELS, activation=None, name="output_layer")
             self.predictions = tf.argmax(output_layer, axis=1)
 
             # Training
             loss = tf.losses.sparse_softmax_cross_entropy(self.labels, output_layer, scope="loss")
             global_step = tf.train.create_global_step()
-            self.training = tf.train.AdamOptimizer().minimize(loss, global_step=global_step, name="training")
+
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(update_ops):
+                self.training = tf.train.AdamOptimizer().minimize(loss, global_step=global_step, name="training")
 
             # Summaries
             self.accuracy = tf.reduce_mean(tf.cast(tf.equal(self.labels, self.predictions), tf.float32))
@@ -64,10 +98,10 @@ class Network:
                 tf.contrib.summary.initialize(session=self.session, graph=self.session.graph)
 
     def train(self, images, labels):
-        self.session.run([self.training, self.summaries["train"]], {self.images: images, self.labels: labels})
+        self.session.run([self.training, self.summaries["train"]], {self.images: images, self.labels: labels, self.is_training:True})
 
     def evaluate(self, dataset, images, labels):
-        accuracy, _ = self.session.run([self.accuracy, self.summaries[dataset]], {self.images: images, self.labels: labels})
+        accuracy, _ = self.session.run([self.accuracy, self.summaries[dataset]], {self.images: images, self.labels: labels,self.is_training:False})
         return accuracy
 
 
@@ -83,7 +117,7 @@ if __name__ == "__main__":
     # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", default=50, type=int, help="Batch size.")
-    parser.add_argument("--cnn", default=None, type=str, help="Description of the CNN architecture.")
+    parser.add_argument("--cnn", default='CB-10-3-2-same,M-3-2,F,R-100', type=str, help="Description of the CNN architecture.")
     parser.add_argument("--epochs", default=10, type=int, help="Number of epochs.")
     parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
     args = parser.parse_args()
