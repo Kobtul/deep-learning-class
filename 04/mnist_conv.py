@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+#
+#4792aab4-bcb8-11e7-a937-00505601122b
+#e47d7ca8-23a9-11e8-9de3-00505601122b
 import numpy as np
 import tensorflow as tf
 
@@ -29,8 +32,34 @@ class Network:
             # - F: Flatten inputs
             # - R-hidden_layer_size: Add a dense layer with ReLU activation and specified size. Ex: R-100
             # Store result in `features`.
+            hidden_layer = self.images
+            for element in args.cnn.split(','):
+                t_args = element.split('-')
+                if(t_args[0] == 'C'):
+                    filters = t_args[1]
+                    kernel_size = int(t_args[2])
+                    stride = int(t_args[3])
+                    padding = t_args[4]
+                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size,stride,padding, activation=tf.nn.relu)
+                elif(t_args[0] == 'M'):
+                    kernel_size = int(t_args[1])
+                    stride = int(t_args[2])
+                    hidden_layer = tf.layers.max_pooling2d(hidden_layer, kernel_size, stride)
+                elif(t_args[0] == 'F'):
+                    hidden_layer = tf.layers.flatten(hidden_layer, name="flatten")
+                elif(t_args[0] == 'R'):
+                    hidden_layer_size = t_args[1]
+                    hidden_layer = tf.layers.dense(hidden_layer, hidden_layer_size, activation=tf.nn.relu,
+                                                   name="hidden_layer")
 
-            output_layer = tf.layers.dense(features, self.LABELS, activation=None, name="output_layer")
+
+            # Convolution Layer with 32 filters and a kernel size of 5
+            # conv1 = tf.layers.conv2d(x, 32, 5, activation=tf.nn.relu)
+            # Max Pooling (down-sampling) with strides of 2 and kernel size of 2
+            # conv1 = tf.layers.max_pooling2d(conv1, 2, 2)
+
+
+            output_layer = tf.layers.dense(hidden_layer, self.LABELS, activation=None, name="output_layer")
             self.predictions = tf.argmax(output_layer, axis=1)
 
             # Training
@@ -75,7 +104,7 @@ if __name__ == "__main__":
     # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", default=50, type=int, help="Batch size.")
-    parser.add_argument("--cnn", default=None, type=str, help="Description of the CNN architecture.")
+    parser.add_argument("--cnn", default='C-10-3-2-same,M-3-2,F,R-100', type=str, help="Description of the CNN architecture.")
     parser.add_argument("--epochs", default=10, type=int, help="Number of epochs.")
     parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
     args = parser.parse_args()
