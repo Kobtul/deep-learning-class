@@ -86,9 +86,9 @@ class Dataset:
         result = ''
         for i in range(0,len(predictions)):
             if predictions[i] == 1:
-                result.append(self._text[i].upper())
+                result+=(self._text[i].upper())
             else:
-                result.append(self._text[i])
+                result+=(self._text[i])
         return result
 
 class Network:
@@ -201,6 +201,8 @@ class Network:
 
         #return self.session.run(self.summaries[dataset], {self.windows: windows, self.labels: labels})
 
+    def save(self, path):
+        self.saver.save(self.session, path)
 
 if __name__ == "__main__":
     import argparse
@@ -251,7 +253,7 @@ if __name__ == "__main__":
         dev_windows, dev_labels = dev.all_data()
         acc = network.evaluate("dev", dev_windows, dev_labels)[1]
         print("Acc:{}".format(acc))
-
+    network.save('mynetwork')
     test_windows, _ = test.all_data()
     predictions = network.evaluate("test", test_windows, np.zeros(len(test_windows)))[2]
     text = test.generate_text(predictions)
