@@ -65,20 +65,20 @@ class Network:
                     kernel_size = int(t_args[2])
                     stride = int(t_args[3])
                     padding = t_args[4]
-                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size,stride,padding, activation=None)
+                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size,stride,padding, activation=None,use_bias=False)
                     hidden_layer = tf.layers.batch_normalization(hidden_layer,training=self.is_training)
                     hidden_layer = tf.nn.relu(hidden_layer)
 
             output_layer = tf.layers.dense(hidden_layer, self.LABELS, activation=None, name="output_layer")
             self.predictions = tf.argmax(output_layer, axis=1)
-
-            # Training
             loss = tf.losses.sparse_softmax_cross_entropy(self.labels, output_layer, scope="loss")
-            global_step = tf.train.create_global_step()
-
+            # Training
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             with tf.control_dependencies(update_ops):
+                global_step = tf.train.create_global_step()
                 self.training = tf.train.AdamOptimizer().minimize(loss, global_step=global_step, name="training")
+
+
 
             # Summaries
             self.accuracy = tf.reduce_mean(tf.cast(tf.equal(self.labels, self.predictions), tf.float32))
