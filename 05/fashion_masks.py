@@ -3,13 +3,14 @@ import numpy as np
 import tensorflow as tf
 
 class Dataset:
-    def __init__(self, filename):
+    def __init__(self, filename, shuffle_batches = True):
         data = np.load(filename)
         self._images = data["images"]
         self._labels = data["labels"] if "labels" in data else None
         self._masks = data["masks"] if "masks" in data else None
 
-        self._permutation = np.random.permutation(len(self._images))
+        self._shuffle_batches = shuffle_batches
+        self._permutation = np.random.permutation(len(self._images)) if self._shuffle_batches else range(len(self._images))
 
     @property
     def images(self):
@@ -26,11 +27,11 @@ class Dataset:
     def next_batch(self, batch_size):
         batch_size = min(batch_size, len(self._permutation))
         batch_perm, self._permutation = self._permutation[:batch_size], self._permutation[batch_size:]
-        return self._images[batch_perm], self._labels[batch_perm], self._masks[batch_perm]
+        return self._images[batch_perm], self._labels[batch_perm] if self._labels is not None else None, self._masks[batch_perm] if self._masks is not None else None
 
     def epoch_finished(self):
         if len(self._permutation) == 0:
-            self._permutation = np.random.permutation(len(self._images))
+            self._permutation = np.random.permutation(len(self._images)) if self._shuffle_batches else range(len(self._images))
             return True
         return False
 
@@ -39,6 +40,54 @@ class Network:
     HEIGHT = 28
     LABELS = 10
 
+    def get_bilinear_filter(self,filter_shape, upscale_factor):
+        ##filter_shape is [width, height, num_in_channels, num_out_channels]
+        kernel_size = filter_shape[1]
+        ### Centre location of the filter for which value is calculated
+        if kernel_size % 2 == 1:
+            centre_location = upscale_factor - 1
+        else:
+            centre_location = upscale_factor - 0.5
+
+        bilinear = np.zeros([filter_shape[0], filter_shape[1]])
+        for x in range(filter_shape[0]):
+            for y in range(filter_shape[1]):
+                ##Interpolation Calculation
+                value = (1 - abs((x - centre_location) / upscale_factor)) * (
+                            1 - abs((y - centre_location) / upscale_factor))
+                bilinear[x, y] = value
+        weights = np.zeros(filter_shape)
+        for i in range(filter_shape[2]):
+            weights[:, :, i, i] = bilinear
+        init = tf.constant_initializer(value=weights,
+                                       dtype=tf.float32)
+
+        bilinear_weights = tf.get_variable(name="decon_bilinear_filter", initializer=init,
+                                           shape=weights.shape)
+        return bilinear_weights
+
+    def upsample_layer(self,bottom,
+                       n_channels, name, upscale_factor):
+
+        kernel_size = 2 * upscale_factor - upscale_factor % 2
+        stride = upscale_factor
+        strides = [1, stride, stride, 1]
+        with tf.variable_scope(name):
+            # Shape of the bottom tensor
+            in_shape = tf.shape(bottom)
+
+            h = ((in_shape[1]) * stride)
+            w = ((in_shape[2]) * stride)
+            new_shape = [in_shape[0], h, w, n_channels]
+            output_shape = tf.stack(new_shape)
+
+            filter_shape = [kernel_size, kernel_size, n_channels, n_channels]
+
+            weights = self.get_bilinear_filter(filter_shape, upscale_factor)
+            deconv = tf.nn.conv2d_transpose(bottom, weights, output_shape,
+                                            strides=strides, padding='SAME')
+
+        return deconv
     def __init__(self, threads, seed=42):
         # Create an empty graph and a session
         graph = tf.Graph()
@@ -62,6 +111,87 @@ class Network:
             # - label predictions are stored in `self.labels_predictions` of shape [None] and type tf.int64
             # - mask predictions are stored in `self.masks_predictions` of shape [None, 28, 28, 1] and type tf.float32
             #   with values 0 or 1
+            mnist_network = "CB-64-3-1-same,CB-64-3-1-same,M-3-2,CB-256-3-1-same,CB-256-3-1-same,M-3-2,S,CB-512-3-1-same,CB-512-3-1-same,M-3-2,F,R-1024"
+            hidden_layer = self.images
+            for element in mnist_network.split(','):
+                t_args = element.split('-')
+                if (t_args[0] == 'C'):
+                    filters = t_args[1]
+                    kernel_size = int(t_args[2])
+                    stride = int(t_args[3])
+                    padding = t_args[4]
+                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
+                                                    activation=tf.nn.relu)
+                elif (t_args[0] == 'M'):
+                    kernel_size = int(t_args[1])
+                    stride = int(t_args[2])
+                    hidden_layer = tf.layers.max_pooling2d(hidden_layer, kernel_size, stride,padding='same')
+                elif (t_args[0] == 'F'):
+                    hidden_layer = tf.layers.flatten(hidden_layer, name="flatten")
+                elif (t_args[0] == 'R'):
+                    hidden_layer_size = t_args[1]
+                    hidden_layer = tf.layers.dense(hidden_layer, hidden_layer_size, activation=tf.nn.relu)
+                elif (t_args[0] == 'CB'):
+                    filters = t_args[1]
+                    kernel_size = int(t_args[2])
+                    stride = int(t_args[3])
+                    padding = t_args[4]
+                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
+                                                    activation=None, use_bias=False)
+                    hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
+                    hidden_layer = tf.nn.relu(hidden_layer)
+                elif(t_args[0] == 'S'):
+                    branch_layer = hidden_layer
+
+            output_layer = tf.layers.dense(hidden_layer, self.LABELS, activation=None, name="output_layer")
+            self.labels_predictions = tf.argmax(output_layer, axis=1)
+            loss = tf.losses.sparse_softmax_cross_entropy(self.labels, output_layer, scope="loss")
+
+            hidden_layer = tf.layers.conv2d(branch_layer, 256, 3, 1, 'same',
+                                            activation=None, use_bias=False)
+            hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
+            hidden_layer = tf.nn.relu(hidden_layer)
+
+            output_mask = self.upsample_layer(hidden_layer,256,'test0',4)
+
+            hidden_layer = tf.layers.conv2d(output_mask, 1, 1, 1, 'same',
+                                            activation=None, use_bias=False)
+            hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
+            hidden_layer = tf.nn.relu(hidden_layer)
+
+            self.masks_predictions = hidden_layer
+
+            # # value = [args.batch_size,256,7,7]
+            # filter = [3,3,256,256]
+            # #filter = 256
+            # output_shape = [args.batch_size, 14, 14, 256]
+            # strides = 1
+            # output_mask = tf.nn.conv2d_transpose(hidden_layer, filter, output_shape=output_shape, strides=strides, padding='SAME')
+            # # output_shape = [args.batch_size, 14, 14, 256]
+            # # strides = [1, 2, 2, 1]
+            # #
+            # # l = tf.constant(0.1, shape=[args.batch_size, 32, 32, 4])
+            # # w = tf.constant(0.1, shape=[7, 7, 128, 4])
+            # #
+            # # h1 = tf.nn.conv2d_transpose(l, w, output_shape=output_shape, strides=strides, padding='SAME')
+            #
+            # self.masks_predictions = output_mask
+
+
+            # Training
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(update_ops):
+                global_step = tf.train.create_global_step()
+                if args.learning_rate_final == None:
+                    learning_rate = args.learning_rate
+                else:
+                    decay_rate = (args.learning_rate_final / args.learning_rate) ** (1 / (args.epochs - 1))
+                    decay_steps = len(train._images) // args.batch_size
+                    learning_rate = tf.train.exponential_decay(staircase=True, learning_rate=args.learning_rate,
+                                                               global_step=global_step, decay_rate=decay_rate,
+                                                               decay_steps=decay_steps)
+                self.training = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(loss, global_step=global_step, name="training")
+
 
             # Summaries
             accuracy = tf.reduce_mean(tf.cast(tf.equal(self.labels, self.labels_predictions), tf.float32))
@@ -117,9 +247,11 @@ if __name__ == "__main__":
 
     # Parse arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", default=None, type=int, help="Batch size.")
-    parser.add_argument("--epochs", default=None, type=int, help="Number of epochs.")
+    parser.add_argument("--batch_size", default=100, type=int, help="Batch size.")
+    parser.add_argument("--epochs", default=5, type=int, help="Number of epochs.")
     parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
+    parser.add_argument("--learning_rate", default=0.001, type=float, help="Initial learning rate.")
+    parser.add_argument("--learning_rate_final", default=0.0005, type=float, help="Final learning rate.")
     args = parser.parse_args()
 
     # Create logdir name
@@ -134,7 +266,7 @@ if __name__ == "__main__":
     # Load the data
     train = Dataset("fashion-masks-train.npz")
     dev = Dataset("fashion-masks-dev.npz")
-    test = Dataset("fashion-masks-test.npz")
+    test = Dataset("fashion-masks-test.npz", shuffle_batches=False)
 
     # Construct the network
     network = Network(threads=args.threads)
@@ -148,7 +280,10 @@ if __name__ == "__main__":
 
         network.evaluate("dev", dev.images, dev.labels, dev.masks)
 
-    labels, masks = network.predict(test.images)
+    # Predict test data
     with open("fashion_masks_test.txt", "w") as test_file:
-        for i in range(len(labels)):
-            print(labels[i], *masks[i].astype(np.uint8).flatten(), file=test_file)
+        while not test.epoch_finished():
+            images, _, _ = test.next_batch(args.batch_size)
+            labels, masks = network.predict(images)
+            for i in range(len(labels)):
+                print(labels[i], *masks[i].astype(np.uint8).flatten(), file=test_file)
