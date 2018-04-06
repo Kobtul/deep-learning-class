@@ -94,6 +94,41 @@ class Network:
         graph.seed = seed
         self.session = tf.Session(graph = graph, config=tf.ConfigProto(inter_op_parallelism_threads=threads,
                                                                        intra_op_parallelism_threads=threads))
+    def build_network_part(self,start_layer,network):
+        hidden_layer = start_layer
+        for element in network.split(','):
+            t_args = element.split('-')
+            if (t_args[0] == 'C'):
+                filters = t_args[1]
+                kernel_size = int(t_args[2])
+                stride = int(t_args[3])
+                padding = t_args[4]
+                hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
+                                                activation=tf.nn.relu)
+            elif (t_args[0] == 'M'):
+                kernel_size = int(t_args[1])
+                stride = int(t_args[2])
+                hidden_layer = tf.layers.max_pooling2d(hidden_layer, kernel_size, stride, padding='same')
+            elif (t_args[0] == 'F'):
+                hidden_layer = tf.layers.flatten(hidden_layer, name="flatten")
+            elif (t_args[0] == 'R'):
+                hidden_layer_size = t_args[1]
+                hidden_layer = tf.layers.dense(hidden_layer, hidden_layer_size, activation=tf.nn.relu)
+            elif (t_args[0] == 'CB'):
+                filters = t_args[1]
+                kernel_size = int(t_args[2])
+                stride = int(t_args[3])
+                padding = t_args[4]
+                hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
+                                                activation=None, use_bias=False)
+                hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
+                hidden_layer = tf.nn.relu(hidden_layer)
+            elif (t_args[0] == 'CU'):
+                filters = int(t_args[1])
+                upscale_factor = int(t_args[2])
+                hidden_layer = self.upsample_layer(hidden_layer,filters,'test0',upscale_factor)
+        return hidden_layer
+
 
     def construct(self, args):
         with self.session.graph.as_default():
@@ -111,55 +146,71 @@ class Network:
             # - label predictions are stored in `self.labels_predictions` of shape [None] and type tf.int64
             # - mask predictions are stored in `self.masks_predictions` of shape [None, 28, 28, 1] and type tf.float32
             #   with values 0 or 1
-            mnist_network = "CB-64-3-1-same,CB-64-3-1-same,M-3-2,CB-256-3-1-same,CB-256-3-1-same,M-3-2,S,CB-512-3-1-same,CB-512-3-1-same,M-3-2,F,R-1024"
+
             hidden_layer = self.images
-            for element in mnist_network.split(','):
-                t_args = element.split('-')
-                if (t_args[0] == 'C'):
-                    filters = t_args[1]
-                    kernel_size = int(t_args[2])
-                    stride = int(t_args[3])
-                    padding = t_args[4]
-                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
-                                                    activation=tf.nn.relu)
-                elif (t_args[0] == 'M'):
-                    kernel_size = int(t_args[1])
-                    stride = int(t_args[2])
-                    hidden_layer = tf.layers.max_pooling2d(hidden_layer, kernel_size, stride,padding='same')
-                elif (t_args[0] == 'F'):
-                    hidden_layer = tf.layers.flatten(hidden_layer, name="flatten")
-                elif (t_args[0] == 'R'):
-                    hidden_layer_size = t_args[1]
-                    hidden_layer = tf.layers.dense(hidden_layer, hidden_layer_size, activation=tf.nn.relu)
-                elif (t_args[0] == 'CB'):
-                    filters = t_args[1]
-                    kernel_size = int(t_args[2])
-                    stride = int(t_args[3])
-                    padding = t_args[4]
-                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
-                                                    activation=None, use_bias=False)
-                    hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
-                    hidden_layer = tf.nn.relu(hidden_layer)
-                elif(t_args[0] == 'S'):
-                    branch_layer = hidden_layer
+            hidden_layer_s = self.build_network_part(hidden_layer,args.cnn_common)
+            final_layer_masks = self.build_network_part(hidden_layer_s,args.cnn_masks)
+            final_layer_labels = self.build_network_part(hidden_layer_s,args.cnn_labels)
 
-            output_layer = tf.layers.dense(hidden_layer, self.LABELS, activation=None, name="output_layer")
-            self.labels_predictions = tf.argmax(output_layer, axis=1)
-            loss = tf.losses.sparse_softmax_cross_entropy(self.labels, output_layer, scope="loss")
+            output_layer_labels = tf.layers.dense(final_layer_labels, self.LABELS, activation=None, name="output_layer")
+            self.labels_predictions = tf.argmax(output_layer_labels, axis=1)
+            loss_labels = tf.losses.sparse_softmax_cross_entropy(self.labels, output_layer_labels, scope="loss")
 
-            hidden_layer = tf.layers.conv2d(branch_layer, 256, 3, 1, 'same',
-                                            activation=None, use_bias=False)
-            hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
-            hidden_layer = tf.nn.relu(hidden_layer)
+            self.masks_predictions = final_layer_masks
+            #self.masks_predictions = tf.cast(final_layer_masks,tf.int32)
+            loss_masks = tf.losses.sparse_softmax_cross_entropy(tf.cast(self.masks,tf.int32), self.masks_predictions, scope="loss")
 
-            output_mask = self.upsample_layer(hidden_layer,256,'test0',4)
+            loss = tf.add(loss_labels,loss_masks)
 
-            hidden_layer = tf.layers.conv2d(output_mask, 1, 1, 1, 'same',
-                                            activation=None, use_bias=False)
-            hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
-            hidden_layer = tf.nn.relu(hidden_layer)
-
-            self.masks_predictions = hidden_layer
+            # mnist_network = "CB-64-3-1-same,CB-64-3-1-same,M-3-2,CB-256-3-1-same,CB-256-3-1-same,M-3-2,S,CB-512-3-1-same,CB-512-3-1-same,M-3-2,F,R-1024"
+            # hidden_layer = self.images
+            # for element in mnist_network.split(','):
+            #     t_args = element.split('-')
+            #     if (t_args[0] == 'C'):
+            #         filters = t_args[1]
+            #         kernel_size = int(t_args[2])
+            #         stride = int(t_args[3])
+            #         padding = t_args[4]
+            #         hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
+            #                                         activation=tf.nn.relu)
+            #     elif (t_args[0] == 'M'):
+            #         kernel_size = int(t_args[1])
+            #         stride = int(t_args[2])
+            #         hidden_layer = tf.layers.max_pooling2d(hidden_layer, kernel_size, stride,padding='same')
+            #     elif (t_args[0] == 'F'):
+            #         hidden_layer = tf.layers.flatten(hidden_layer, name="flatten")
+            #     elif (t_args[0] == 'R'):
+            #         hidden_layer_size = t_args[1]
+            #         hidden_layer = tf.layers.dense(hidden_layer, hidden_layer_size, activation=tf.nn.relu)
+            #     elif (t_args[0] == 'CB'):
+            #         filters = t_args[1]
+            #         kernel_size = int(t_args[2])
+            #         stride = int(t_args[3])
+            #         padding = t_args[4]
+            #         hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
+            #                                         activation=None, use_bias=False)
+            #         hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
+            #         hidden_layer = tf.nn.relu(hidden_layer)
+            #     elif(t_args[0] == 'S'):
+            #         branch_layer = hidden_layer
+            #
+            # output_layer = tf.layers.dense(hidden_layer, self.LABELS, activation=None, name="output_layer")
+            # self.labels_predictions = tf.argmax(output_layer, axis=1)
+            # loss = tf.losses.sparse_softmax_cross_entropy(self.labels, output_layer, scope="loss")
+            #
+            # hidden_layer = tf.layers.conv2d(branch_layer, 256, 3, 1, 'same',
+            #                                 activation=None, use_bias=False)
+            # hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
+            # hidden_layer = tf.nn.relu(hidden_layer)
+            #
+            # output_mask = self.upsample_layer(hidden_layer,256,'test0',4)
+            #
+            # hidden_layer = tf.layers.conv2d(output_mask, 1, 1, 1, 'same',
+            #                                 activation=None, use_bias=False)
+            # hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
+            # hidden_layer = tf.nn.relu(hidden_layer)
+            #
+            # self.masks_predictions = hidden_layer
 
             # # value = [args.batch_size,256,7,7]
             # filter = [3,3,256,256]
@@ -252,6 +303,11 @@ if __name__ == "__main__":
     parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
     parser.add_argument("--learning_rate", default=0.001, type=float, help="Initial learning rate.")
     parser.add_argument("--learning_rate_final", default=0.0005, type=float, help="Final learning rate.")
+    parser.add_argument("--cnn-common", default='CB-64-3-1-same,CB-64-3-1-same,M-3-2,CB-256-3-1-same,CB-256-3-1-same,M-3-2', type=str, help="Description of the CNN architecture.")
+    parser.add_argument("--cnn-masks", default='CB-256-3-1-same,CB-256-3-1-same,CU-256-4,CB-1-1-1', type=str, help="Description of the CNN architecture.")
+    parser.add_argument("--cnn-labels", default='F,R-1024', type=str, help="Description of the CNN architecture.")
+
+
     args = parser.parse_args()
 
     # Create logdir name
