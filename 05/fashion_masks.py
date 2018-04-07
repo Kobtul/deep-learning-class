@@ -40,6 +40,8 @@ class Network:
     HEIGHT = 28
     LABELS = 10
 
+
+    # from     # from http://warmspringwinds.github.io/tensorflow/tf-slim/2016/11/22/upsampling-and-image-segmentation-with-tensorflow-and-tf-slim/
     def get_bilinear_filter(self,filter_shape, upscale_factor):
         ##filter_shape is [width, height, num_in_channels, num_out_channels]
         kernel_size = filter_shape[1]
@@ -66,6 +68,7 @@ class Network:
                                            shape=weights.shape)
         return bilinear_weights
 
+    # from http://warmspringwinds.github.io/tensorflow/tf-slim/2016/11/22/upsampling-and-image-segmentation-with-tensorflow-and-tf-slim/
     def upsample_layer(self,bottom,
                        n_channels, name, upscale_factor):
 
@@ -243,7 +246,7 @@ if __name__ == "__main__":
     parser.add_argument("--cnn-common", default='CB-64-3-1-same,CB-64-3-1-same,M-3-2,CB-256-3-1-same,CB-256-3-1-same,M-3-2', type=str, help="Description of the CNN architecture.")
     parser.add_argument("--cnn-masks", default='CB-256-3-1-same,CB-256-3-1-same,CU-256-4,C-2-1-1-same', type=str, help="Description of the CNN architecture.")
     parser.add_argument("--cnn-labels", default='F,R-1024', type=str, help="Description of the CNN architecture.")
-
+    #parameters "--epochs 30 --batch_size 180 --cnn-masks CB-256-3-1-same,CB-256-3-1-same,CU-256-4,CB-2-1-1-same"
 
     args = parser.parse_args()
 
