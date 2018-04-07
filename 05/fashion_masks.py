@@ -156,78 +156,12 @@ class Network:
             self.labels_predictions = tf.argmax(output_layer_labels, axis=1)
             loss_labels = tf.losses.sparse_softmax_cross_entropy(self.labels, output_layer_labels, scope="loss")
 
-            self.masks_predictions = final_layer_masks
-            #self.masks_predictions = tf.cast(final_layer_masks,tf.int32)
-            loss_masks = tf.losses.sparse_softmax_cross_entropy(tf.cast(self.masks,tf.int32), self.masks_predictions, scope="loss")
+            #This is because I do not know how to use tf.nn.sparse_softmax_cross_entropy_with_logits
+            predictions_for_cross_entropy = tf.reshape(final_layer_masks, [-1, self.HEIGHT, self.WIDTH, 2])
+            loss_masks = tf.losses.sparse_softmax_cross_entropy(tf.cast(self.masks, tf.int64), predictions_for_cross_entropy, scope="mask_loss")
+
 
             loss = tf.add(loss_labels,loss_masks)
-
-            # mnist_network = "CB-64-3-1-same,CB-64-3-1-same,M-3-2,CB-256-3-1-same,CB-256-3-1-same,M-3-2,S,CB-512-3-1-same,CB-512-3-1-same,M-3-2,F,R-1024"
-            # hidden_layer = self.images
-            # for element in mnist_network.split(','):
-            #     t_args = element.split('-')
-            #     if (t_args[0] == 'C'):
-            #         filters = t_args[1]
-            #         kernel_size = int(t_args[2])
-            #         stride = int(t_args[3])
-            #         padding = t_args[4]
-            #         hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
-            #                                         activation=tf.nn.relu)
-            #     elif (t_args[0] == 'M'):
-            #         kernel_size = int(t_args[1])
-            #         stride = int(t_args[2])
-            #         hidden_layer = tf.layers.max_pooling2d(hidden_layer, kernel_size, stride,padding='same')
-            #     elif (t_args[0] == 'F'):
-            #         hidden_layer = tf.layers.flatten(hidden_layer, name="flatten")
-            #     elif (t_args[0] == 'R'):
-            #         hidden_layer_size = t_args[1]
-            #         hidden_layer = tf.layers.dense(hidden_layer, hidden_layer_size, activation=tf.nn.relu)
-            #     elif (t_args[0] == 'CB'):
-            #         filters = t_args[1]
-            #         kernel_size = int(t_args[2])
-            #         stride = int(t_args[3])
-            #         padding = t_args[4]
-            #         hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
-            #                                         activation=None, use_bias=False)
-            #         hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
-            #         hidden_layer = tf.nn.relu(hidden_layer)
-            #     elif(t_args[0] == 'S'):
-            #         branch_layer = hidden_layer
-            #
-            # output_layer = tf.layers.dense(hidden_layer, self.LABELS, activation=None, name="output_layer")
-            # self.labels_predictions = tf.argmax(output_layer, axis=1)
-            # loss = tf.losses.sparse_softmax_cross_entropy(self.labels, output_layer, scope="loss")
-            #
-            # hidden_layer = tf.layers.conv2d(branch_layer, 256, 3, 1, 'same',
-            #                                 activation=None, use_bias=False)
-            # hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
-            # hidden_layer = tf.nn.relu(hidden_layer)
-            #
-            # output_mask = self.upsample_layer(hidden_layer,256,'test0',4)
-            #
-            # hidden_layer = tf.layers.conv2d(output_mask, 1, 1, 1, 'same',
-            #                                 activation=None, use_bias=False)
-            # hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
-            # hidden_layer = tf.nn.relu(hidden_layer)
-            #
-            # self.masks_predictions = hidden_layer
-
-            # # value = [args.batch_size,256,7,7]
-            # filter = [3,3,256,256]
-            # #filter = 256
-            # output_shape = [args.batch_size, 14, 14, 256]
-            # strides = 1
-            # output_mask = tf.nn.conv2d_transpose(hidden_layer, filter, output_shape=output_shape, strides=strides, padding='SAME')
-            # # output_shape = [args.batch_size, 14, 14, 256]
-            # # strides = [1, 2, 2, 1]
-            # #
-            # # l = tf.constant(0.1, shape=[args.batch_size, 32, 32, 4])
-            # # w = tf.constant(0.1, shape=[7, 7, 128, 4])
-            # #
-            # # h1 = tf.nn.conv2d_transpose(l, w, output_shape=output_shape, strides=strides, padding='SAME')
-            #
-            # self.masks_predictions = output_mask
-
 
             # Training
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -243,7 +177,10 @@ class Network:
                                                                decay_steps=decay_steps)
                 self.training = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(loss, global_step=global_step, name="training")
 
-
+            # Reformating data for the Sumaries
+            self.masks_predictions = tf.argmax(predictions_for_cross_entropy, axis=3)
+            self.masks_predictions = tf.cast(self.masks_predictions,tf.float32)
+            self.masks_predictions = tf.reshape(self.masks_predictions,[-1,28,28,1])
             # Summaries
             accuracy = tf.reduce_mean(tf.cast(tf.equal(self.labels, self.labels_predictions), tf.float32))
             only_correct_masks = tf.where(tf.equal(self.labels, self.labels_predictions),
@@ -304,7 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", default=0.001, type=float, help="Initial learning rate.")
     parser.add_argument("--learning_rate_final", default=0.0005, type=float, help="Final learning rate.")
     parser.add_argument("--cnn-common", default='CB-64-3-1-same,CB-64-3-1-same,M-3-2,CB-256-3-1-same,CB-256-3-1-same,M-3-2', type=str, help="Description of the CNN architecture.")
-    parser.add_argument("--cnn-masks", default='CB-256-3-1-same,CB-256-3-1-same,CU-256-4,CB-1-1-1', type=str, help="Description of the CNN architecture.")
+    parser.add_argument("--cnn-masks", default='CB-256-3-1-same,CB-256-3-1-same,CU-256-4,C-2-1-1-same', type=str, help="Description of the CNN architecture.")
     parser.add_argument("--cnn-labels", default='F,R-1024', type=str, help="Description of the CNN architecture.")
 
 
