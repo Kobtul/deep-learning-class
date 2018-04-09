@@ -64,7 +64,8 @@ class Network:
         init = tf.constant_initializer(value=weights,
                                        dtype=tf.float32)
 
-        bilinear_weights = tf.get_variable(name="decon_bilinear_filter", initializer=init,
+        with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+            bilinear_weights = tf.get_variable(name="decon_bilinear_filter", initializer=init,
                                            shape=weights.shape)
         return bilinear_weights
 
