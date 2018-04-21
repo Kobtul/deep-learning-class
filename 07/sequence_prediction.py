@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+#
+#4792aab4-bcb8-11e7-a937-00505601122b
+#e47d7ca8-23a9-11e8-9de3-00505601122b
 import numpy as np
 import tensorflow as tf
 
@@ -22,26 +25,45 @@ class Network:
             # TODO: Create RNN cell according to args.rnn_cell (RNN, LSTM and GRU should be supported,
             # using BasicRNNCell, BasicLSTMCell and GRUCell from tf.nn.rnn_cell module),
             # with dimensionality of args.rnn_cell_dim. Store the cell in `rnn_cell`.
-
-            state = # TODO: Create zero state using rnn_cell.zero_state call. Use batch size 1.
+            if(args.rnn_cell == 'LSTM'):
+                rnn_cell = tf.nn.rnn_cell.BasicLSTMCell(args.rnn_cell_dim)
+            elif(args.rnn_cell == 'RNN'):
+                rnn_cell = tf.nn.rnn_cell.BasicRNNCell(args.rnn_cell_dim)
+            elif(args.rnn_cell == 'GRU'):
+                rnn_cell = tf.nn.rnn_cell.GRUCell(args.rnn_cell_dim)
+            else:
+                pass
+            # TODO: Create zero state using rnn_cell.zero_state call. Use batch size 1.
+            state = rnn_cell.zero_state(1,dtype=tf.float32)
             predictions, loss = [], 0
-            dense = # TODO: Create a dense layer object using tf.layers.Dense, with 1 output unit.
-            for i in range(self.TRAIN):
+            #dense = # TODO: Create a dense layer object using tf.layers.Dense, with 1 output unit.
+            #dense = tf.layers.dense(r, 1, activation=None)
+
+            dense = tf.layers.Dense(1, activation=None)
+            output, state = rnn_cell(tf.reshape(tf.constant(0,tf.float32),[1,1]),state)
+            predictions.append(tf.squeeze(dense(output)))
+            loss += tf.losses.mean_squared_error(self.sequence[0], predictions[-1])
+
+            for i in range(1,self.TRAIN):
+
                 # TODO: Call rnn_cell (the input should be 0.0 on first step and self.sequence[i - 1] otherwise).
                 # Note that rnn_cell assumes the input is a batch of vectors, so you need to produce the
                 # input with [1, 1] shape.
-                #
+                output, state = rnn_cell(tf.reshape(self.sequence[i-1],[1,1]), state)
                 # Then compute current prediction, by using `dense` layer, and append the scalar prediction
                 # (i.e., with shape []) to `predictions`.
-                #
+                predictions.append(tf.squeeze(dense(output)))
                 # Also add mean square error of the prediction and self.sequence[i] to the loss.
-
+                loss+=tf.losses.mean_squared_error(self.sequence[i],predictions[-1])
             for i in range(self.TEST):
                 # TODO: Call rnn_cell, the input should be the latest prediction. Generate a new
                 # prediction using the `dense` layer and append it to `predictions`.
+                output, state = rnn_cell(tf.reshape(predictions[-1],[1,1]), state)
+                predictions.append(tf.squeeze(dense(output)))
+
 
             # TODO: Generate `self.predictions` tensor (instead of Python list), use `tf.stack`.
-
+            self.predictions = tf.stack(predictions,0)
             # Training
             global_step = tf.train.create_global_step()
             self.training = tf.train.AdamOptimizer().minimize(loss, global_step=global_step, name="training")
@@ -80,8 +102,9 @@ class Network:
             prediction_image[y(gold[i]), i] = [0, 0, 255] if i < self.TRAIN else [0, 255, 0]
             prediction_image[y(predictions[i]), i] = [255, 0, 0]
 
-        self.session.run(self.summaries["prediction"],
+        _,prediction_loss =self.session.run([self.summaries["prediction"],self.prediction_loss],
                          {self.predictions: predictions, self.prediction_gold: gold[self.TRAIN:], self.prediction_image: prediction_image})
+        return prediction_loss
 
 
 if __name__ == "__main__":
@@ -128,6 +151,6 @@ if __name__ == "__main__":
         for step in range(args.steps_per_epoch):
             network.train(data[:Network.TRAIN])
 
-        network.prediction_summary(data, network.predict(data[:Network.TRAIN]))
-
+        prediction_loss = network.prediction_summary(data, network.predict(data[:Network.TRAIN]))
         # TODO: Print network.prediction_loss for each epoch, using "{:.2g}" format.
+        print("{:.2g}".format(prediction_loss))

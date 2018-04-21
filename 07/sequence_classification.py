@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import numpy as np
 import tensorflow as tf
-
+#
+#4792aab4-bcb8-11e7-a937-00505601122b
+#e47d7ca8-23a9-11e8-9de3-00505601122b
 class Dataset:
     def __init__(self, sequences, sequence_length, sequence_dim, shuffle_batches=True):
         self._sequences = np.zeros([sequences, sequence_length, sequence_dim], np.int32)
@@ -56,21 +58,33 @@ class Network:
             # TODO: Create RNN cell according to args.rnn_cell (RNN, LSTM and GRU should be supported,
             # using BasicRNNCell, BasicLSTMCell and GRUCell from tf.nn.rnn_cell module),
             # with dimensionality of args.rnn_cell_dim. Store the cell in `rnn_cell`.
-
+            if(args.rnn_cell == 'LSTM'):
+                rnn_cell = tf.nn.rnn_cell.BasicLSTMCell(args.rnn_cell_dim)
+            elif(args.rnn_cell == 'RNN'):
+                rnn_cell = tf.nn.rnn_cell.BasicRNNCell(args.rnn_cell_dim)
+            elif(args.rnn_cell == 'GRU'):
+                rnn_cell = tf.nn.rnn_cell.GRUCell(args.rnn_cell_dim)
+            else:
+                pass
             # TODO: Process self.sequences using `tf.nn.dynamic_rnn` and `rnn_cell`,
             # store the outputs to `hidden_layer` and ignore output states.
-
+            outputs, state = tf.nn.dynamic_rnn(rnn_cell,self.sequences,dtype=tf.float32)
             # TODO: If args.hidden_layer, add a dense layer with `args.hidden_layer` neurons
             # and ReLU activation.
+            if(args.hidden_layer is not None):
+                hidden_layer = tf.layers.dense(outputs, args.hidden_layer, activation=tf.nn.relu)
+                output_layer = tf.layers.dense(hidden_layer, 1, activation=None, name="output_layer")
+            else:
+                output_layer = tf.layers.dense(outputs, 1, activation=None, name="output_layer")
 
             # TODO: Add a dense layer with one output neuron, without activation, into `output_layer`
 
             # TODO: Remove the third dimension from `output_layer` using `tf.squeeze`.
-
+            output_layer = tf.squeeze(output_layer,[2])
             # TODO: Generate self.predictions with either False/True according to whether
             # values in `output_layer` are less or grater than 0 (using `tf.greater_equal`).
             # This corresponds to rounding the probability of sigmoid applied to `output_layer`.
-
+            self.predictions = tf.greater_equal(output_layer,0)
             # Training
             loss = tf.losses.sigmoid_cross_entropy(tf.cast(self.labels, tf.int32), output_layer)
             global_step = tf.train.create_global_step()
@@ -80,6 +94,10 @@ class Network:
             # finally apply then using `optimizer.apply_gradients`.
             gradients, variables = zip(*optimizer.compute_gradients(loss))
             # TODO: Compute norm of gradients using `tf.global_norm` into `gradient_norm`.
+
+            gradient_norm = tf.global_norm(gradients)
+            if(args.clip_gradient is not None):
+                gradients,_ = tf.clip_by_global_norm(gradients,args.clip_gradient,use_norm=gradient_norm)
             # TODO: If args.clip_gradient, clip gradients (back into `gradients`) using `tf.clip_by_global_norm`.
             self.training = optimizer.apply_gradients(zip(gradients, variables), global_step=global_step)
 
