@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+#
+#4792aab4-bcb8-11e7-a937-00505601122b
+#e47d7ca8-23a9-11e8-9de3-00505601122b
 import numpy as np
 import tensorflow as tf
 
@@ -24,27 +27,39 @@ class Network:
 
             # TODO: Choose RNN cell class according to args.rnn_cell (LSTM and GRU
             # should be supported, using tf.nn.rnn_cell.{BasicLSTM,GRU}Cell).
+            if (args.rnn_cell == 'LSTM'):
+                rnn_cell_fw = tf.nn.rnn_cell.BasicLSTMCell(args.rnn_cell_dim)
+                rnn_cell_bw = tf.nn.rnn_cell.BasicLSTMCell(args.rnn_cell_dim)
+            elif (args.rnn_cell == 'GRU'):
+                rnn_cell_fw = tf.nn.rnn_cell.GRUCell(args.rnn_cell_dim)
+                rnn_cell_bw = tf.nn.rnn_cell.GRUCell(args.rnn_cell_dim)
+            else:
+                pass
 
-            # TODO: Create word embeddings for num_words of dimensionality args.we_dim.
-
-            # TODO: Embed self.word_ids using the word embeddings.
-
+            # TODO: Create word embeddings for num_words of dimensionality args.we_dim
+            # using `tf.get_variable`.
+            word_embedings = tf.get_variable("word_emb", [num_words, args.we_dim])
+            # TODO: Embed self.word_ids according to the word embeddings, by utilizing
+            # `tf.nn.embedding_lookup`.
+            embeded_inputs = tf.nn.embedding_lookup(word_embedings,self.word_ids)
             # TODO: Using tf.nn.bidirectional_dynamic_rnn, process the embedded inputs.
-            # Use given rnn_cell (different for fwd and bwd direction).
-
-            # TODO: Concatenate the outputs for fwd and bwd directions.
-
+            # Use given rnn_cell (different for fwd and bwd direction) and self.sentence_lens.
+            output, _ = tf.nn.bidirectional_dynamic_rnn(rnn_cell_fw,rnn_cell_bw,embeded_inputs,sequence_length=self.sentence_lens,dtype=tf.float32)
+            # TODO: Concatenate the outputs for fwd and bwd directions (in the third dimension).
+            output_fw, output_bw = output
+            output_fw_bw = tf.concat([output_fw,output_bw],2)
             # TODO: Add a dense layer (without activation) into num_tags classes and
             # store result in `output_layer`.
-
+            output_layer = tf.layers.dense(output_fw_bw, num_tags, activation=None, name="output_layer")
             # TODO: Generate `self.predictions`.
+            self.predictions = tf.argmax(output_layer, axis=2)
 
             # TODO: Generate `weights` as a 1./0. mask of valid/invalid words (using `tf.sequence_mask`).
-
+            weights = tf.sequence_mask(self.sentence_lens,dtype=tf.float32)
             # Training
-
             # TODO: Define `loss` using `tf.losses.sparse_softmax_cross_entropy`, but additionally
             # use `weights` parameter to mask-out invalid words.
+            loss = tf.losses.sparse_softmax_cross_entropy(self.tags, output_layer,weights=weights)
 
             global_step = tf.train.create_global_step()
             self.training = tf.train.AdamOptimizer().minimize(loss, global_step=global_step, name="training")
