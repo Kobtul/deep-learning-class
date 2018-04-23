@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
-
-# This source depends on the NASNet A Mobile network, which can be downloaded
-# from http://ufal.mff.cuni.cz/~straka/courses/npfl114/1718/nasnet_a_mobile.zip.
-
 import numpy as np
 import tensorflow as tf
-#from tensorflow.contrib.framework import assign_from_checkpoint_fn
-import tensorflow.contrib.slim as slim
-
-import nets.nasnet.nasnet
-
 class Dataset:
     def __init__(self, filename, shuffle_batches = True):
         data = np.load(filename)
@@ -37,10 +28,9 @@ class Dataset:
             self._permutation = np.random.permutation(len(self._images)) if self._shuffle_batches else np.arange(len(self._images))
             return True
         return False
-
-
 class Network:
     WIDTH, HEIGHT = 224, 224
+    LABELS = 250
 
     def __init__(self, threads, seed=42):
         # Create an empty graph and a session
@@ -51,48 +41,46 @@ class Network:
 
     def construct(self, args):
         with self.session.graph.as_default():
-            # Inputs
-            self.images = tf.placeholder(tf.uint8, [None, self.HEIGHT, self.WIDTH, 1], name="images")
+            self.images = tf.placeholder(tf.float32, [None, self.HEIGHT, self.WIDTH, 1], name="images")
             self.labels = tf.placeholder(tf.int64, [None], name="labels")
             self.is_training = tf.placeholder(tf.bool, [], name="is_training")
 
-            # Create NASNet
-            images = 2 * (tf.tile(tf.image.convert_image_dtype(self.images, tf.float32), [1, 1, 1, 3]) - 0.5)
-            with tf.contrib.slim.arg_scope(nets.nasnet.nasnet.nasnet_mobile_arg_scope()):
-                features, end_points = nets.nasnet.nasnet.build_nasnet_mobile(images, num_classes=None, is_training=False)
-            self.nasnet_saver = tf.train.Saver()
+            hidden_layer = self.images
+            for element in args.cnn.split(','):
+                t_args = element.split('-')
+                if (t_args[0] == 'C'):
+                    filters = t_args[1]
+                    kernel_size = int(t_args[2])
+                    stride = int(t_args[3])
+                    padding = t_args[4]
+                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
+                                                    activation=tf.nn.relu)
+                elif (t_args[0] == 'M'):
+                    kernel_size = int(t_args[1])
+                    stride = int(t_args[2])
+                    hidden_layer = tf.layers.max_pooling2d(hidden_layer, kernel_size, stride)
+                elif (t_args[0] == 'F'):
+                    hidden_layer = tf.layers.flatten(hidden_layer, name="flatten")
+                elif (t_args[0] == 'R'):
+                    hidden_layer_size = t_args[1]
+                    hidden_layer = tf.layers.dense(hidden_layer, hidden_layer_size, activation=tf.nn.relu)
+                elif (t_args[0] == 'CB'):
+                    filters = t_args[1]
+                    kernel_size = int(t_args[2])
+                    stride = int(t_args[3])
+                    padding = t_args[4]
+                    hidden_layer = tf.layers.conv2d(hidden_layer, filters, kernel_size, stride, padding,
+                                                    activation=None, use_bias=False)
+                    hidden_layer = tf.layers.batch_normalization(hidden_layer, training=self.is_training)
+                    hidden_layer = tf.nn.relu(hidden_layer)
 
-            #TODO: Implement 2 fully conected layers with dropout or another normalization(batch, layer). Size of them 1000 neurons.
+            output_layer = tf.layers.dense(hidden_layer, self.LABELS, activation=None, name="output_layer")
+            self.predictions = tf.argmax(output_layer, axis=1)
+            loss = tf.losses.sparse_softmax_cross_entropy(self.labels, output_layer, scope="loss")
 
 
-            #one_hot_labels = slim.one_hot_encoding(self.labels, 250)
 
-            #__nasnet_params = [var for var in slim.get_variables_to_restore()]
-            #net = slim.assign_from_checkpoint_fn(args.nasnet, __nasnet_params)
-            #self.predictions = tf.argmax(end_points['Predictions'], 1)
-
-            #hidden_layer = tf.layers.dense(features, 2048, activation=tf.nn.relu)
-            output_layer_labels = tf.layers.dense(features,250, activation=None, name="output_layer")
-
-            self.predictions = tf.argmax(output_layer_labels, axis=1)
-            #self.predictions = tf.argmax(features, 1)
-            #loss = tf.losses.softmax_cross_entropy(onehot_labels=one_hot_labels, logits=features)
-            loss = tf.losses.sparse_softmax_cross_entropy(self.labels, output_layer_labels, scope="loss")
-            # TODO: Computation and training.
-            #
-            # The code below assumes that:
-            # - loss is stored in `self.loss`
-            # - training is stored in `self.training`
-            # - label predictions are stored in `self.predictions`
-            #variables_to_restore = slim.get_variables_to_restore()
-
-            # Perform one-hot-encoding of the labels (Try one-hot-encoding within the load_batch function!)
-            #one_hot_labels = slim.one_hot_encoding(self.labels, 250)
-
-            # Performs the equivalent to tf.nn.sparse_softmax_cross_entropy_with_logits but enhanced with checks
-            #loss = tf.losses.softmax_cross_entropy(onehot_labels=one_hot_labels, logits=features)
-            #predictions = tf.argmax(end_points['Predictions'], 1)
-
+            # Training
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             with tf.control_dependencies(update_ops):
                 global_step = tf.train.create_global_step()
@@ -104,13 +92,10 @@ class Network:
                     learning_rate = tf.train.exponential_decay(staircase=True, learning_rate=args.learning_rate,
                                                                global_step=global_step, decay_rate=decay_rate,
                                                                decay_steps=decay_steps)
-                self.training = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(loss,
-                                                                                             global_step=global_step,
-                                                                                             name="training")
+                self.training = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(loss, global_step=global_step, name="training")
 
-            self.loss = loss
-            #self.predictions = predictions
             # Summaries
+            self.loss = loss
             self.accuracy = tf.reduce_mean(tf.cast(tf.equal(self.labels, self.predictions), tf.float32))
             summary_writer = tf.contrib.summary.create_file_writer(args.logdir, flush_millis=10 * 1000)
             self.summaries = {}
@@ -122,16 +107,13 @@ class Network:
                 self.given_accuracy = tf.placeholder(tf.float32, [], name="given_accuracy")
                 for dataset in ["dev", "test"]:
                     self.summaries[dataset] = [tf.contrib.summary.scalar(dataset + "/loss", self.given_loss),
-                                               tf.contrib.summary.scalar(dataset + "/accuracy", self.given_accuracy)]
+                                               tf.contrib.summary.scalar(dataset + "/accuracy",
+                                                                         self.given_accuracy)]
 
             # Initialize variables
             self.session.run(tf.global_variables_initializer())
             with summary_writer.as_default():
                 tf.contrib.summary.initialize(session=self.session, graph=self.session.graph)
-
-            # Load NASNet
-            self.nasnet_saver.restore(self.session, args.nasnet)
-
     def train_batch(self, images, labels):
         self.session.run([self.training, self.summaries["train"]], {self.images: images, self.labels: labels, self.is_training: True})
 
@@ -155,7 +137,6 @@ class Network:
             labels.append(self.session.run(self.predictions, {self.images: images, self.is_training: False}))
         return np.concatenate(labels)
 
-
 if __name__ == "__main__":
     import argparse
     import datetime
@@ -167,16 +148,18 @@ if __name__ == "__main__":
 
     # Parse arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", default=1200, type=int, help="Batch size.")
-    parser.add_argument("--epochs", default=20, type=int, help="Number of epochs.")
-    parser.add_argument("--nasnet", default="nets/nasnet/model.ckpt", type=str, help="NASNet checkpoint path.")
+    parser.add_argument("--batch_size", default=100, type=int, help="Batch size.")
+    #parser.add_argument("--cnn", default='CB-20-3-2-same,M-3-2,CB-30-3-2-same,M-3-2,F,R-1024,R-10', type=str, help="Description of the CNN architecture.")
+    #parser.add_argument("--cnn", default='CB-10-3-2-same,M-3-2,F,R-100', type=str, help="Description of the CNN architecture.")
+    parser.add_argument("--cnn", default='CB-64-7-1-valid,M-3-2-same,CB-128-3-1-same,F,R-1024', type=str, help="Description of the CNN architecture.")
+
+    parser.add_argument("--epochs", default=10, type=int, help="Number of epochs.")
     parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
     parser.add_argument("--learning_rate", default=0.001, type=float, help="Initial learning rate.")
     parser.add_argument("--learning_rate_final", default=0.0005, type=float, help="Final learning rate.")
 
+    #final args: "-    "--epochs 30 --batch_size 500 --learning_rate_final 0.0001 --cnn CB-64-10-4-same,CB-64-3-1-same,CB-64-3-1-same,M-3-2,CB-256-3-1-same,CB-256-3-1-same,M-3-2,CB-512-3-1-same,CB-512-3-1-same,M-3-2,F,R-1024""
     args = parser.parse_args()
-    #args = parser.parse_args('--nasnet nasnet-a_mobile_04_10_2017/model.ckpt.data-00000-of-00001')
-
 
     # Create logdir name
     args.logdir = "logs/{}-{}-{}".format(
@@ -185,7 +168,7 @@ if __name__ == "__main__":
         ",".join(("{}={}".format(re.sub("(.)[^_]*_?", r"\1", key), value)
                   for key, value in sorted(vars(args).items()))).replace("/", "-")
     )
-    if not os.path.exists("logs"): os.mkdir("logs") # TF 1.6 will do this by itself
+    if not os.path.exists("logs"): os.mkdir("logs")  # TF 1.6 will do this by itself
 
     # Load the data
     train = Dataset("nsketch-train.npz")
@@ -209,3 +192,4 @@ if __name__ == "__main__":
         labels = network.predict(test, args.batch_size)
         for label in labels:
             print(label, file=test_file)
+
